@@ -79,12 +79,6 @@ La suite usa `httpx.ASGITransport` per provar routers FastAPI sense dependre de
 `fastapi.testclient.TestClient`, que en algunes combinacions recents de
 FastAPI/Starlette/httpx pot bloquejar-se.
 
-## Resum en castellà
-
-`edutictac-community` es una librería compartida, no un servicio central. Reúne
-SQLite, rate limit, cookies firmadas, OIDC y lógica común de comunidad para que
-cada backend EduTicTac mantenga sus propios datos sin duplicar código.
-
 ## Notes d'operació
 
 - El paquet no guarda estat compartit entre aplicacions: cada servei conserva la
