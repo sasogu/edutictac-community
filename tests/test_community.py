@@ -1,5 +1,6 @@
+import pytest
 from fastapi import FastAPI, Request, Response
-from fastapi.testclient import TestClient
+from httpx import ASGITransport, AsyncClient
 
 from edutictac_community.community import Identity, create_community_router
 
@@ -7,25 +8,40 @@ from edutictac_community.community import Identity, create_community_router
 def make_app(db_path, resolver):
     app = FastAPI()
     app.include_router(create_community_router(db_path, resolver), prefix="/api/community")
-    return TestClient(app)
+    return app
 
 
 def anon_resolver(uid):
     def _resolver(request: Request, response: Response):
         return Identity(uid=uid, admin=False)
+
     return _resolver
 
 
 def admin_resolver(uid="admin-1"):
     def _resolver(request: Request, response: Response):
         return Identity(uid=uid, admin=True)
+
     return _resolver
 
 
-def test_preferences_empty(tmp_path):
+def async_anon_resolver(uid):
+    async def _resolver(request: Request, response: Response):
+        return Identity(uid=uid, admin=False)
+
+    return _resolver
+
+
+async def client_for(app):
+    transport = ASGITransport(app=app)
+    return AsyncClient(transport=transport, base_url="http://testserver")
+
+
+@pytest.mark.anyio
+async def test_preferences_empty(tmp_path):
     db = str(tmp_path / "c.db")
-    client = make_app(db, anon_resolver("u1"))
-    r = client.get("/api/community/preferences")
+    async with await client_for(make_app(db, anon_resolver("u1"))) as client:
+        r = await client.get("/api/community/preferences")
     assert r.status_code == 200
     body = r.json()
     assert body["favorites"] == []
@@ -34,47 +50,59 @@ def test_preferences_empty(tmp_path):
     assert body["admin"] is False
 
 
-def test_toggle_favorite(tmp_path):
+@pytest.mark.anyio
+async def test_accepts_async_identity_resolver(tmp_path):
     db = str(tmp_path / "c.db")
-    client = make_app(db, anon_resolver("u1"))
-    assert client.post("/api/community/favorites/toggle", json={"item_key": "k"}).json()["favorite"] is True
-    assert client.post("/api/community/favorites/toggle", json={"item_key": "k"}).json()["favorite"] is False
-    prefs = client.get("/api/community/preferences").json()
+    async with await client_for(make_app(db, async_anon_resolver("u1"))) as client:
+        r = await client.get("/api/community/preferences")
+    assert r.status_code == 200
+    assert r.json()["admin"] is False
+
+
+@pytest.mark.anyio
+async def test_toggle_favorite(tmp_path):
+    db = str(tmp_path / "c.db")
+    async with await client_for(make_app(db, anon_resolver("u1"))) as client:
+        assert (await client.post("/api/community/favorites/toggle", json={"item_key": "k"})).json()["favorite"] is True
+        assert (await client.post("/api/community/favorites/toggle", json={"item_key": "k"})).json()["favorite"] is False
+        prefs = (await client.get("/api/community/preferences")).json()
     assert prefs["favorites"] == []
 
 
-def test_rating_aggregation(tmp_path):
+@pytest.mark.anyio
+async def test_rating_aggregation(tmp_path):
     db = str(tmp_path / "c.db")
-    a = make_app(db, anon_resolver("u1"))
-    b = make_app(db, anon_resolver("u2"))
+    async with await client_for(make_app(db, anon_resolver("u1"))) as a:
+        r = (await a.post("/api/community/ratings", json={"item_key": "k", "value": 5})).json()
+        assert (r["avg"], r["count"]) == (5.0, 1)
 
-    r = a.post("/api/community/ratings", json={"item_key": "k", "value": 5}).json()
-    assert (r["avg"], r["count"]) == (5.0, 1)
+        r = (await a.post("/api/community/ratings", json={"item_key": "k", "value": 3})).json()
+        assert (r["avg"], r["count"]) == (3.0, 1)
 
-    r = a.post("/api/community/ratings", json={"item_key": "k", "value": 3}).json()
-    assert (r["avg"], r["count"]) == (3.0, 1)
+        async with await client_for(make_app(db, anon_resolver("u2"))) as b:
+            r = (await b.post("/api/community/ratings", json={"item_key": "k", "value": 4})).json()
+            assert (r["avg"], r["count"]) == (3.5, 2)
 
-    r = b.post("/api/community/ratings", json={"item_key": "k", "value": 4}).json()
-    assert (r["avg"], r["count"]) == (3.5, 2)
-
-    summary = a.get("/api/community/preferences").json()["rating_summary"]
+        summary = (await a.get("/api/community/preferences")).json()["rating_summary"]
     assert summary["k"] == {"avg": 3.5, "count": 2}
 
 
-def test_report_and_admin_hide(tmp_path):
+@pytest.mark.anyio
+async def test_report_and_admin_hide(tmp_path):
     db = str(tmp_path / "c.db")
-    anon = make_app(db, anon_resolver("u1"))
-    admin = make_app(db, admin_resolver())
+    async with await client_for(make_app(db, anon_resolver("u1"))) as anon:
+        assert (await anon.post("/api/community/reports", json={"item_key": "k"})).json()["count"] == 1
 
-    assert anon.post("/api/community/reports", json={"item_key": "k"}).json()["count"] == 1
-    assert admin.post("/api/community/admin/hide", json={"item_key": "k"}).json()["admin_reported"] is True
+        async with await client_for(make_app(db, admin_resolver())) as admin:
+            assert (await admin.post("/api/community/admin/hide", json={"item_key": "k"})).json()["admin_reported"] is True
 
-    broken = anon.get("/api/community/preferences").json()["broken_reports"]
+        broken = (await anon.get("/api/community/preferences")).json()["broken_reports"]
     assert broken["k"] == {"count": 1, "admin_reported": True}
 
 
-def test_admin_hide_forbidden_for_anon(tmp_path):
+@pytest.mark.anyio
+async def test_admin_hide_forbidden_for_anon(tmp_path):
     db = str(tmp_path / "c.db")
-    anon = make_app(db, anon_resolver("u1"))
-    r = anon.post("/api/community/admin/hide", json={"item_key": "k"})
+    async with await client_for(make_app(db, anon_resolver("u1"))) as anon:
+        r = await anon.post("/api/community/admin/hide", json={"item_key": "k"})
     assert r.status_code == 403

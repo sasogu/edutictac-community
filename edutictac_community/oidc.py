@@ -39,7 +39,7 @@ class OIDCClient:
         self.admin_subjects = admin_subjects or set()
         self.admin_emails = {e.lower() for e in (admin_emails or set()) if e}
         self._meta: dict | None = None
-        self._jwks = None
+        self._jwks_cache = None
 
     def enabled(self) -> bool:
         return bool(
@@ -59,13 +59,13 @@ class OIDCClient:
         return self._meta
 
     def _jwks(self, meta: dict):
-        if self._jwks is None:
+        if self._jwks_cache is None:
             resp = httpx.get(
                 meta["jwks_uri"], timeout=20, headers={"User-Agent": self.user_agent}
             )
             resp.raise_for_status()
-            self._jwks = JsonWebKey.import_key_set(resp.json())
-        return self._jwks
+            self._jwks_cache = JsonWebKey.import_key_set(resp.json())
+        return self._jwks_cache
 
     def _client(self) -> OAuth2Client:
         return OAuth2Client(

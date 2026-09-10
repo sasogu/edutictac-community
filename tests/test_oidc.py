@@ -35,6 +35,34 @@ def test_state_cookie_roundtrip():
     assert c._decode(token + "x") is None
 
 
+def test_jwks_cache_does_not_shadow_method(monkeypatch):
+    c = make_client()
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"keys": []}
+
+    def fake_get(url, timeout, headers):
+        calls.append({"url": url, "timeout": timeout, "headers": headers})
+        return FakeResponse()
+
+    monkeypatch.setattr("edutictac_community.oidc.httpx.get", fake_get)
+    monkeypatch.setattr(
+        "edutictac_community.oidc.JsonWebKey.import_key_set",
+        lambda payload: {"imported": payload},
+    )
+
+    first = c._jwks({"jwks_uri": "https://id.example.test/jwks"})
+    second = c._jwks({"jwks_uri": "https://id.example.test/jwks"})
+
+    assert first == second == {"imported": {"keys": []}}
+    assert len(calls) == 1
+
+
 def test_callback_rejects_missing_state():
     c = make_client()
     with pytest.raises(ValueError):

@@ -55,6 +55,10 @@ uvicorn examples.minimal_app:app --host 127.0.0.1 --port 8010
 pytest -q
 ```
 
+La suite usa `httpx.ASGITransport` para probar routers FastAPI sin depender de
+`fastapi.testclient.TestClient`, que en algunas combinaciones recientes de
+FastAPI/Starlette/httpx puede bloquearse.
+
 ## Llicència
 
 MIT.

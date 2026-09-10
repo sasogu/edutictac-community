@@ -6,9 +6,10 @@ módulo no centraliza datos: sólo reutiliza la lógica de datos de comunidad.
 """
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Callable
+from typing import Awaitable, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
@@ -57,7 +58,7 @@ class Identity:
     admin: bool = False
 
 
-IdentityResolver = Callable[[Request, Response], Identity]
+IdentityResolver = Callable[[Request, Response], Identity | Awaitable[Identity]]
 RateLimitFn = Callable[[str], bool]
 
 
@@ -100,6 +101,12 @@ def create_community_router(
 
     router = APIRouter()
 
+    async def _identity_dependency(request: Request, response: Response) -> Identity:
+        identity = resolve_identity(request, response)
+        if inspect.isawaitable(identity):
+            identity = await identity
+        return identity
+
     def _guard(request: Request) -> None:
         if rate_limited is not None:
             key = request.client.host if request.client else "?"
@@ -107,7 +114,7 @@ def create_community_router(
                 raise HTTPException(status_code=429, detail="too many requests")
 
     @router.get("/preferences")
-    def preferences(request: Request, identity: Identity = Depends(resolve_identity)) -> dict:
+    async def preferences(identity: Identity = Depends(_identity_dependency)) -> dict:
         uid = identity.uid
         with connect(db_path) as conn:
             favorites = [r["item_key"] for r in conn.execute(
@@ -137,10 +144,10 @@ def create_community_router(
         }
 
     @router.post("/favorites/toggle")
-    def toggle_favorite(
+    async def toggle_favorite(
         payload: ItemKeyIn,
         request: Request,
-        identity: Identity = Depends(resolve_identity),
+        identity: Identity = Depends(_identity_dependency),
     ) -> dict:
         _guard(request)
         item_key = _valid_key(payload.item_key)
@@ -164,10 +171,10 @@ def create_community_router(
             return {"favorite": True}
 
     @router.post("/ratings")
-    def set_rating(
+    async def set_rating(
         payload: RatingIn,
         request: Request,
-        identity: Identity = Depends(resolve_identity),
+        identity: Identity = Depends(_identity_dependency),
     ) -> dict:
         _guard(request)
         item_key = _valid_key(payload.item_key)
@@ -221,10 +228,10 @@ def create_community_router(
         return {"value": next_val, "avg": avg, "count": count}
 
     @router.post("/reports")
-    def report_broken(
+    async def report_broken(
         payload: ItemKeyIn,
         request: Request,
-        identity: Identity = Depends(resolve_identity),
+        identity: Identity = Depends(_identity_dependency),
     ) -> dict:
         _guard(request)
         item_key = _valid_key(payload.item_key)
@@ -252,10 +259,10 @@ def create_community_router(
         return {"count": count, "admin_reported": admin_reported}
 
     @router.post("/admin/hide")
-    def admin_hide(
+    async def admin_hide(
         payload: ItemKeyIn,
         request: Request,
-        identity: Identity = Depends(resolve_identity),
+        identity: Identity = Depends(_identity_dependency),
     ) -> dict:
         _guard(request)
         if not identity.admin:
