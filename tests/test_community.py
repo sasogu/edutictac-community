@@ -11,6 +11,20 @@ def make_app(db_path, resolver):
     return app
 
 
+def make_game_key_app(db_path, resolver):
+    app = FastAPI()
+    app.include_router(
+        create_community_router(
+            db_path,
+            resolver,
+            key_field="game_key",
+            db_key_column="game_key",
+        ),
+        prefix="/api/community",
+    )
+    return app
+
+
 def anon_resolver(uid):
     def _resolver(request: Request, response: Response):
         return Identity(uid=uid, admin=False)
@@ -106,3 +120,31 @@ async def test_admin_hide_forbidden_for_anon(tmp_path):
     async with await client_for(make_app(db, anon_resolver("u1"))) as anon:
         r = await anon.post("/api/community/admin/hide", json={"item_key": "k"})
     assert r.status_code == 403
+
+
+@pytest.mark.anyio
+async def test_game_key_adapter_uses_existing_column_names(tmp_path):
+    db = str(tmp_path / "c.db")
+    async with await client_for(make_game_key_app(db, anon_resolver("u1"))) as client:
+        assert (await client.post("/api/community/favorites/toggle", json={"game_key": "g"})).json()["favorite"] is True
+        rating = (await client.post("/api/community/ratings", json={"game_key": "g", "value": 5})).json()
+        report = (await client.post("/api/community/reports", json={"game_key": "g"})).json()
+        prefs = (await client.get("/api/community/preferences")).json()
+
+    assert rating == {"value": 5, "avg": 5.0, "count": 1}
+    assert report == {"count": 1, "admin_reported": False}
+    assert prefs["favorites"] == ["g"]
+    assert prefs["ratings"] == {"g": 5}
+    assert prefs["reports"] == ["g"]
+    assert prefs["rating_summary"] == {"g": {"avg": 5.0, "count": 1}}
+    assert prefs["broken_reports"] == {"g": {"count": 1, "admin_reported": False}}
+
+
+def test_rejects_unsafe_key_column(tmp_path):
+    with pytest.raises(ValueError):
+        create_community_router(
+            str(tmp_path / "c.db"),
+            anon_resolver("u1"),
+            key_field="game_key",
+            db_key_column="game_key; DROP TABLE ratings",
+        )

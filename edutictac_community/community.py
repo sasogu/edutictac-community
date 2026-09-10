@@ -12,39 +12,41 @@ from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+import re
+
 from pydantic import BaseModel
 
 from .db import connect
 
-SCHEMA = """
+SCHEMA_TEMPLATE = """
 CREATE TABLE IF NOT EXISTS favorites (
     user_id TEXT NOT NULL,
-    item_key TEXT NOT NULL,
+    {key_column} TEXT NOT NULL,
     created_at TEXT,
-    PRIMARY KEY (user_id, item_key)
+    PRIMARY KEY (user_id, {key_column})
 );
 CREATE TABLE IF NOT EXISTS ratings (
     user_id TEXT NOT NULL,
-    item_key TEXT NOT NULL,
+    {key_column} TEXT NOT NULL,
     value INTEGER NOT NULL,
     updated_at TEXT,
-    PRIMARY KEY (user_id, item_key)
+    PRIMARY KEY (user_id, {key_column})
 );
 CREATE TABLE IF NOT EXISTS reports (
     user_id TEXT NOT NULL,
-    item_key TEXT NOT NULL,
+    {key_column} TEXT NOT NULL,
     reported_at TEXT,
-    PRIMARY KEY (user_id, item_key)
+    PRIMARY KEY (user_id, {key_column})
 );
 CREATE TABLE IF NOT EXISTS rating_summary (
-    item_key TEXT PRIMARY KEY,
+    {key_column} TEXT PRIMARY KEY,
     sum INTEGER NOT NULL DEFAULT 0,
     count INTEGER NOT NULL DEFAULT 0,
     avg REAL NOT NULL DEFAULT 0,
     updated_at TEXT
 );
 CREATE TABLE IF NOT EXISTS broken_reports (
-    item_key TEXT PRIMARY KEY,
+    {key_column} TEXT PRIMARY KEY,
     count INTEGER NOT NULL DEFAULT 0,
     admin_reported INTEGER NOT NULL DEFAULT 0,
     updated_at TEXT
@@ -82,11 +84,27 @@ def _valid_key(item_key: str) -> str:
     return key
 
 
+def _valid_identifier(name: str) -> str:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name or ""):
+        raise ValueError(f"invalid SQL identifier: {name!r}")
+    return name
+
+
+def _payload_key(payload: BaseModel | dict, key_field: str) -> str:
+    if isinstance(payload, BaseModel):
+        value = getattr(payload, key_field, None)
+    else:
+        value = payload.get(key_field)
+    return _valid_key(str(value or ""))
+
+
 def create_community_router(
     db_path: str,
     resolve_identity: IdentityResolver,
     *,
     rate_limited: RateLimitFn | None = None,
+    key_field: str = "item_key",
+    db_key_column: str = "item_key",
 ) -> APIRouter:
     """Construye un APIRouter con los endpoints de comunidad.
 
@@ -96,8 +114,12 @@ def create_community_router(
     escritura; recibe una clave (p. ej. la IP) y devuelve True si hay que
     rechazar la petición con 429.
     """
+    key_field = _valid_identifier(key_field)
+    key_column = _valid_identifier(db_key_column)
+    schema = SCHEMA_TEMPLATE.format(key_column=key_column)
+
     with connect(db_path) as conn:
-        conn.executescript(SCHEMA)
+        conn.executescript(schema)
 
     router = APIRouter()
 
@@ -118,21 +140,23 @@ def create_community_router(
         uid = identity.uid
         with connect(db_path) as conn:
             favorites = [r["item_key"] for r in conn.execute(
-                "SELECT item_key FROM favorites WHERE user_id = ?", (uid,)
+                f"SELECT {key_column} AS item_key FROM favorites WHERE user_id = ?", (uid,)
             )] if uid else []
             ratings = {r["item_key"]: r["value"] for r in conn.execute(
-                "SELECT item_key, value FROM ratings WHERE user_id = ?", (uid,)
+                f"SELECT {key_column} AS item_key, value FROM ratings WHERE user_id = ?", (uid,)
             )} if uid else {}
             reports = [r["item_key"] for r in conn.execute(
-                "SELECT item_key FROM reports WHERE user_id = ?", (uid,)
+                f"SELECT {key_column} AS item_key FROM reports WHERE user_id = ?", (uid,)
             )] if uid else []
             rating_summary = {
                 r["item_key"]: {"avg": r["avg"], "count": r["count"]}
-                for r in conn.execute("SELECT item_key, avg, count FROM rating_summary")
+                for r in conn.execute(f"SELECT {key_column} AS item_key, avg, count FROM rating_summary")
             }
             broken_reports = {
                 r["item_key"]: {"count": r["count"], "admin_reported": bool(r["admin_reported"])}
-                for r in conn.execute("SELECT item_key, count, admin_reported FROM broken_reports")
+                for r in conn.execute(
+                    f"SELECT {key_column} AS item_key, count, admin_reported FROM broken_reports"
+                )
             }
         return {
             "admin": identity.admin,
@@ -145,53 +169,53 @@ def create_community_router(
 
     @router.post("/favorites/toggle")
     async def toggle_favorite(
-        payload: ItemKeyIn,
+        payload: dict,
         request: Request,
         identity: Identity = Depends(_identity_dependency),
     ) -> dict:
         _guard(request)
-        item_key = _valid_key(payload.item_key)
+        item_key = _payload_key(payload, key_field)
         if not identity.uid:
             raise HTTPException(status_code=401, detail="identity required")
         with connect(db_path) as conn:
             row = conn.execute(
-                "SELECT 1 FROM favorites WHERE user_id = ? AND item_key = ?",
+                f"SELECT 1 FROM favorites WHERE user_id = ? AND {key_column} = ?",
                 (identity.uid, item_key),
             ).fetchone()
             if row:
                 conn.execute(
-                    "DELETE FROM favorites WHERE user_id = ? AND item_key = ?",
+                    f"DELETE FROM favorites WHERE user_id = ? AND {key_column} = ?",
                     (identity.uid, item_key),
                 )
                 return {"favorite": False}
             conn.execute(
-                "INSERT INTO favorites (user_id, item_key, created_at) VALUES (?, ?, ?)",
+                f"INSERT INTO favorites (user_id, {key_column}, created_at) VALUES (?, ?, ?)",
                 (identity.uid, item_key, _now()),
             )
             return {"favorite": True}
 
     @router.post("/ratings")
     async def set_rating(
-        payload: RatingIn,
+        payload: dict,
         request: Request,
         identity: Identity = Depends(_identity_dependency),
     ) -> dict:
         _guard(request)
-        item_key = _valid_key(payload.item_key)
+        item_key = _payload_key(payload, key_field)
         if not identity.uid:
             raise HTTPException(status_code=401, detail="identity required")
-        value = max(0, min(5, payload.value))
+        value = max(0, min(5, int(payload.get("value", 0))))
 
         with connect(db_path) as conn:
             current_row = conn.execute(
-                "SELECT value FROM ratings WHERE user_id = ? AND item_key = ?",
+                f"SELECT value FROM ratings WHERE user_id = ? AND {key_column} = ?",
                 (identity.uid, item_key),
             ).fetchone()
             current = current_row["value"] if current_row else 0
             next_val = 0 if current == value else value
 
             summary = conn.execute(
-                "SELECT sum, count FROM rating_summary WHERE item_key = ?", (item_key,)
+                f"SELECT sum, count FROM rating_summary WHERE {key_column} = ?", (item_key,)
             ).fetchone()
             s = summary["sum"] if summary else 0
             c = summary["count"] if summary else 0
@@ -203,24 +227,24 @@ def create_community_router(
                 s += next_val
                 c += 1
                 conn.execute(
-                    "INSERT INTO ratings (user_id, item_key, value, updated_at) VALUES (?, ?, ?, ?) "
-                    "ON CONFLICT(user_id, item_key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+                    f"INSERT INTO ratings (user_id, {key_column}, value, updated_at) VALUES (?, ?, ?, ?) "
+                    f"ON CONFLICT(user_id, {key_column}) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
                     (identity.uid, item_key, next_val, _now()),
                 )
             else:
                 conn.execute(
-                    "DELETE FROM ratings WHERE user_id = ? AND item_key = ?",
+                    f"DELETE FROM ratings WHERE user_id = ? AND {key_column} = ?",
                     (identity.uid, item_key),
                 )
 
             if c <= 0:
-                conn.execute("DELETE FROM rating_summary WHERE item_key = ?", (item_key,))
+                conn.execute(f"DELETE FROM rating_summary WHERE {key_column} = ?", (item_key,))
                 avg, count = 0.0, 0
             else:
                 avg = round(s / c, 2)
                 conn.execute(
-                    "INSERT INTO rating_summary (item_key, sum, count, avg, updated_at) VALUES (?, ?, ?, ?, ?) "
-                    "ON CONFLICT(item_key) DO UPDATE SET sum=excluded.sum, count=excluded.count, avg=excluded.avg, updated_at=excluded.updated_at",
+                    f"INSERT INTO rating_summary ({key_column}, sum, count, avg, updated_at) VALUES (?, ?, ?, ?, ?) "
+                    f"ON CONFLICT({key_column}) DO UPDATE SET sum=excluded.sum, count=excluded.count, avg=excluded.avg, updated_at=excluded.updated_at",
                     (item_key, s, c, avg, _now()),
                 )
                 count = c
@@ -229,56 +253,56 @@ def create_community_router(
 
     @router.post("/reports")
     async def report_broken(
-        payload: ItemKeyIn,
+        payload: dict,
         request: Request,
         identity: Identity = Depends(_identity_dependency),
     ) -> dict:
         _guard(request)
-        item_key = _valid_key(payload.item_key)
+        item_key = _payload_key(payload, key_field)
         if not identity.uid:
             raise HTTPException(status_code=401, detail="identity required")
 
         with connect(db_path) as conn:
             cur = conn.execute(
-                "INSERT OR IGNORE INTO reports (user_id, item_key, reported_at) VALUES (?, ?, ?)",
+                f"INSERT OR IGNORE INTO reports (user_id, {key_column}, reported_at) VALUES (?, ?, ?)",
                 (identity.uid, item_key, _now()),
             )
             inserted_report = cur.rowcount > 0
             row = conn.execute(
-                "SELECT count, admin_reported FROM broken_reports WHERE item_key = ?", (item_key,)
+                f"SELECT count, admin_reported FROM broken_reports WHERE {key_column} = ?", (item_key,)
             ).fetchone()
             count = (row["count"] if row else 0) + (1 if inserted_report else 0)
             admin_reported = bool(row["admin_reported"]) if row else False
             if identity.admin:
                 admin_reported = True
             conn.execute(
-                "INSERT INTO broken_reports (item_key, count, admin_reported, updated_at) VALUES (?, ?, ?, ?) "
-                "ON CONFLICT(item_key) DO UPDATE SET count=excluded.count, admin_reported=excluded.admin_reported, updated_at=excluded.updated_at",
+                f"INSERT INTO broken_reports ({key_column}, count, admin_reported, updated_at) VALUES (?, ?, ?, ?) "
+                f"ON CONFLICT({key_column}) DO UPDATE SET count=excluded.count, admin_reported=excluded.admin_reported, updated_at=excluded.updated_at",
                 (item_key, count, 1 if admin_reported else 0, _now()),
             )
         return {"count": count, "admin_reported": admin_reported}
 
     @router.post("/admin/hide")
     async def admin_hide(
-        payload: ItemKeyIn,
+        payload: dict,
         request: Request,
         identity: Identity = Depends(_identity_dependency),
     ) -> dict:
         _guard(request)
         if not identity.admin:
             raise HTTPException(status_code=403, detail="admin required")
-        item_key = _valid_key(payload.item_key)
+        item_key = _payload_key(payload, key_field)
 
         with connect(db_path) as conn:
             row = conn.execute(
-                "SELECT count FROM broken_reports WHERE item_key = ?", (item_key,)
+                f"SELECT count FROM broken_reports WHERE {key_column} = ?", (item_key,)
             ).fetchone()
             count = row["count"] if row else 0
             conn.execute(
-                "INSERT INTO broken_reports (item_key, count, admin_reported, updated_at) VALUES (?, ?, 1, ?) "
-                "ON CONFLICT(item_key) DO UPDATE SET admin_reported=1, updated_at=excluded.updated_at",
+                f"INSERT INTO broken_reports ({key_column}, count, admin_reported, updated_at) VALUES (?, ?, 1, ?) "
+                f"ON CONFLICT({key_column}) DO UPDATE SET admin_reported=1, updated_at=excluded.updated_at",
                 (item_key, count, _now()),
             )
-        return {"item_key": item_key, "count": count, "admin_reported": True}
+        return {key_field: item_key, "count": count, "admin_reported": True}
 
     return router
