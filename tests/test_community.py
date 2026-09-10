@@ -19,6 +19,7 @@ def make_game_key_app(db_path, resolver):
             resolver,
             key_field="game_key",
             db_key_column="game_key",
+            admin_hide_path="/admin/resources/hide",
         ),
         prefix="/api/community",
     )
@@ -138,6 +139,16 @@ async def test_game_key_adapter_uses_existing_column_names(tmp_path):
     assert prefs["reports"] == ["g"]
     assert prefs["rating_summary"] == {"g": {"avg": 5.0, "count": 1}}
     assert prefs["broken_reports"] == {"g": {"count": 1, "admin_reported": False}}
+
+
+@pytest.mark.anyio
+async def test_game_key_adapter_preserves_admin_hide_path(tmp_path):
+    db = str(tmp_path / "c.db")
+    async with await client_for(make_game_key_app(db, admin_resolver())) as client:
+        response = await client.post("/api/community/admin/resources/hide", json={"game_key": "g"})
+
+    assert response.status_code == 200
+    assert response.json() == {"game_key": "g", "count": 0, "admin_reported": True}
 
 
 def test_rejects_unsafe_key_column(tmp_path):

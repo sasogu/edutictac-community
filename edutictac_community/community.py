@@ -98,6 +98,13 @@ def _payload_key(payload: BaseModel | dict, key_field: str) -> str:
     return _valid_key(str(value or ""))
 
 
+def _payload_int(payload: dict, field: str, default: int = 0) -> int:
+    try:
+        return int(payload.get(field, default))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail=f"invalid {field}")
+
+
 def create_community_router(
     db_path: str,
     resolve_identity: IdentityResolver,
@@ -105,6 +112,7 @@ def create_community_router(
     rate_limited: RateLimitFn | None = None,
     key_field: str = "item_key",
     db_key_column: str = "item_key",
+    admin_hide_path: str = "/admin/hide",
 ) -> APIRouter:
     """Construye un APIRouter con los endpoints de comunidad.
 
@@ -204,7 +212,7 @@ def create_community_router(
         item_key = _payload_key(payload, key_field)
         if not identity.uid:
             raise HTTPException(status_code=401, detail="identity required")
-        value = max(0, min(5, int(payload.get("value", 0))))
+        value = max(0, min(5, _payload_int(payload, "value")))
 
         with connect(db_path) as conn:
             current_row = conn.execute(
@@ -282,7 +290,7 @@ def create_community_router(
             )
         return {"count": count, "admin_reported": admin_reported}
 
-    @router.post("/admin/hide")
+    @router.post(admin_hide_path)
     async def admin_hide(
         payload: dict,
         request: Request,

@@ -5,4 +5,4 @@ lógica de comunidad favoritos/valoraciones/avisos) para que cada aplicación
 del Commons EduTicTac no tenga que reescribirlos.
 """
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"

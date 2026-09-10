@@ -36,14 +36,15 @@ Vegeu `DECISIONS-DISSENY.md` al repositori `edutictac-commons`.
 
 | Servei | Ús actual del nucli | Estat |
 |---|---|---|
-| `recursos-api` | SQLite, rate limit, cookies firmades, OIDC i router de comunitat amb `game_key` | Producció (`v0.1.2`) |
+| `recursos-api` | SQLite, rate limit, cookies firmades, OIDC i router de comunitat amb `game_key` | Producció (`v0.1.3`) |
 | `edumusic-api` | SQLite i rate limit | Producció (`v0.1.1`) |
 | `edutictac-id-api` | SQLite, rate limit i cookies firmades | Producció (`v0.1.1`) |
 
 El router compartit usa `item_key` per defecte, però accepta `key_field` i
 `db_key_column` per adaptar-se a contractes existents. `recursos-api` l'usa amb
 `game_key` tant en el JSON públic com en les taules SQLite, sense migrar dades
-ni canviar la PWA.
+ni canviar la PWA. També es pot configurar `admin_hide_path` per preservar rutes
+existents com `/api/admin/resources/hide`.
 
 ## Instal·lació
 
@@ -56,7 +57,7 @@ pip install -e .[dev]
 Per consumir una versió estable des d'un backend EduTicTac:
 
 ```txt
-edutictac-community @ git+https://git.edutictac.es/Edutictac/edutictac-community.git@v0.1.2
+edutictac-community @ git+https://git.edutictac.es/Edutictac/edutictac-community.git@v0.1.3
 ```
 
 ## Exemple
