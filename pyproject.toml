@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "edutictac-community"
-version = "0.1.3"
+version = "0.1.4"
 description = "Núcleo compartido para los microservicios del Commons EduTicTac"
 readme = "README.md"
 requires-python = ">=3.10"

@@ -2,6 +2,8 @@ import pytest
 from fastapi import FastAPI, Request, Response
 from httpx import ASGITransport, AsyncClient
 
+from edutictac_community.db import connect
+from edutictac_community.migrations import current_version
 from edutictac_community.community import Identity, create_community_router
 
 
@@ -159,3 +161,11 @@ def test_rejects_unsafe_key_column(tmp_path):
             key_field="game_key",
             db_key_column="game_key; DROP TABLE ratings",
         )
+
+
+def test_community_schema_has_migration_namespace(tmp_path):
+    db = str(tmp_path / "c.db")
+    make_game_key_app(db, anon_resolver("u1"))
+
+    with connect(db) as conn:
+        assert current_version(conn, "community:game_key") == 1

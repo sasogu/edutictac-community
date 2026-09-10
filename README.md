@@ -27,6 +27,7 @@ Vegeu `DECISIONS-DISSENY.md` al repositori `edutictac-commons`.
 | Mòdul | Funció |
 |---|---|
 | `edutictac_community.db` | `connect(db_path)` — SQLite amb WAL i Row factory |
+| `edutictac_community.migrations` | `apply_migrations(...)` — versionat SQLite per namespace |
 | `edutictac_community.ratelimit` | `RateLimiter(max_calls, window_seconds)` |
 | `edutictac_community.session` | `SignedSession` — cookies firmades HMAC |
 | `edutictac_community.oidc` | `OIDCClient` — authorization code + PKCE (authlib) |
@@ -36,7 +37,7 @@ Vegeu `DECISIONS-DISSENY.md` al repositori `edutictac-commons`.
 
 | Servei | Ús actual del nucli | Estat |
 |---|---|---|
-| `recursos-api` | SQLite, rate limit, cookies firmades, OIDC i router de comunitat amb `game_key` | Producció (`v0.1.3`) |
+| `recursos-api` | SQLite, rate limit, cookies firmades, OIDC i router de comunitat amb `game_key` | Producció (`v0.1.4`) |
 | `edumusic-api` | SQLite i rate limit | Producció (`v0.1.1`) |
 | `edutictac-id-api` | SQLite, rate limit i cookies firmades | Producció (`v0.1.1`) |
 
@@ -57,8 +58,30 @@ pip install -e .[dev]
 Per consumir una versió estable des d'un backend EduTicTac:
 
 ```txt
-edutictac-community @ git+https://git.edutictac.es/Edutictac/edutictac-community.git@v0.1.3
+edutictac-community @ git+https://git.edutictac.es/Edutictac/edutictac-community.git@v0.1.4
 ```
+
+## Migracions
+
+El paquet usa una taula pròpia `_edutictac_migrations` amb versionat per
+`namespace`, no `PRAGMA user_version`. Això evita conflictes quan una mateixa
+SQLite conté taules de l'aplicació i taules compartides del nucli.
+
+Exemple:
+
+```python
+from edutictac_community.migrations import Migration, apply_migrations
+
+with connect(db_path) as conn:
+    apply_migrations(
+        conn,
+        "community:game_key",
+        [Migration(1, "... SQL idempotent ...")],
+    )
+```
+
+El router de comunitat ja aplica automàticament la migració inicial del seu
+esquema (`community:item_key` o `community:game_key`, segons configuració).
 
 ## Exemple
 

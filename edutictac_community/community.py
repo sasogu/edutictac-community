@@ -7,16 +7,16 @@ módulo no centraliza datos: sólo reutiliza la lógica de datos de comunidad.
 from __future__ import annotations
 
 import inspect
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-import re
-
 from pydantic import BaseModel
 
 from .db import connect
+from .migrations import Migration, apply_migrations
 
 SCHEMA_TEMPLATE = """
 CREATE TABLE IF NOT EXISTS favorites (
@@ -125,9 +125,10 @@ def create_community_router(
     key_field = _valid_identifier(key_field)
     key_column = _valid_identifier(db_key_column)
     schema = SCHEMA_TEMPLATE.format(key_column=key_column)
+    namespace = f"community:{key_column}"
 
     with connect(db_path) as conn:
-        conn.executescript(schema)
+        apply_migrations(conn, namespace, [Migration(1, schema)])
 
     router = APIRouter()
 
