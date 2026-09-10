@@ -75,9 +75,15 @@ uvicorn examples.minimal_app:app --host 127.0.0.1 --port 8010
 pytest -q
 ```
 
-La suite usa `httpx.ASGITransport` para probar routers FastAPI sin depender de
-`fastapi.testclient.TestClient`, que en algunas combinaciones recientes de
-FastAPI/Starlette/httpx puede bloquearse.
+La suite usa `httpx.ASGITransport` per provar routers FastAPI sense dependre de
+`fastapi.testclient.TestClient`, que en algunes combinacions recents de
+FastAPI/Starlette/httpx pot bloquejar-se.
+
+## Resum en castellà
+
+`edutictac-community` es una librería compartida, no un servicio central. Reúne
+SQLite, rate limit, cookies firmadas, OIDC y lógica común de comunidad para que
+cada backend EduTicTac mantenga sus propios datos sin duplicar código.
 
 ## Notes d'operació
 
